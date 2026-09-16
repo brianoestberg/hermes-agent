@@ -47,10 +47,12 @@ import { normalize } from '@/lib/text'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
 import { cn } from '@/lib/utils'
 import { recordPreviewArtifact } from '@/store/preview-status'
+import { sessionApprovalRequest } from '@/store/prompts'
 import { $toolInlineDiff } from '@/store/tool-diffs'
 import { $toolRowDismissed, dismissToolRow } from '@/store/tool-dismiss'
 import { $anyToolDisclosureOpen, $toolDisclosureOpen, $toolViewMode, setToolDisclosureOpen } from '@/store/tool-view'
 
+import { isApprovalActivity, isCurrentTurnMessage } from './approval-activity'
 import {
   buildToolView,
   clampForDisplay,
@@ -65,8 +67,8 @@ import {
   selectMessageRunning,
   stripInlineDiffChrome,
   toolCopyPayload,
+  toolEntryDisclosureId,
   type ToolPart,
-  toolPartDisclosureId,
   type ToolStatus,
   type ToolTitleAction
 } from './fallback-model'
@@ -331,17 +333,6 @@ function useDisclosureOpen(disclosureId: string, fallbackOpen = false): boolean 
   const persistedOpen = useStore($toolDisclosureOpen(disclosureId))
 
   return persistedOpen ?? fallbackOpen
-}
-
-/**
- * A row's disclosure id, scoped to the message it was rendered in.
- *
- * Shared with the run that wraps the row: a live run has to know when one of
- * its own rows has been opened, and both sides have to name it identically or
- * the run never hears about it.
- */
-function toolEntryDisclosureId(messageId: string, part: ToolPart): string {
-  return `tool-entry:${messageId}:${toolPartDisclosureId(part)}`
 }
 
 function ToolEntry({ part }: ToolEntryProps) {
@@ -827,6 +818,7 @@ function ToolRunHeader({
 }
 
 interface ToolRunState {
+  approvalActivity: boolean
   completedAt?: number
   count: number
   /** Disclosure id of each row in the run, so the run can tell when one is open. */
@@ -881,6 +873,7 @@ function useToolRun(startIndex: number, endIndex: number): ToolRunState {
             undefined
           ),
           count: tools.length,
+          approvalActivity: tools.length > 0 && tools.every(isApprovalActivity),
           entryIds: tools.map(tool => toolEntryDisclosureId(state.message.id, tool)),
           key: tools[0]?.toolCallId ?? '',
           live,
@@ -923,25 +916,30 @@ const ToolRun: FC<PropsWithChildren<{ endIndex: number; startIndex: number }>> =
 }) => {
   const messageRunning = useAuiState(selectMessageRunning)
 
-  const { completedAt, count, entryIds, key, live, startedAt, summary } = useToolRun(
+  const { completedAt, count, entryIds, key, live, startedAt, summary, approvalActivity } = useToolRun(
     startIndex,
     endIndex
   )
+
+  const sessionId = useStore(useSessionView().$runtimeId)
+  const approval = useStore(useMemo(() => sessionApprovalRequest(sessionId), [sessionId]))
+  const currentTurn = useAuiState(state => isCurrentTurnMessage(state.thread.messages, state.message.id))
 
   const disclosureId = `tool-run:${key}`
   const persistedOpen = useStore($toolDisclosureOpen(disclosureId))
   const rowOpen = useStore(useMemo(() => $anyToolDisclosureOpen(entryIds), [entryIds]))
   const enterRef = useEnterAnimation(messageRunning, `tool-run:${key}`)
 
-  // A lone call is already its own one-line summary; heading it with a second
-  // line would say the same thing twice.
-  if (count < 2) {
-    return <>{children}</>
-  }
-
   // Expanded output stays reachable instead of ticking past in a one-line run.
   const unfurled = rowOpen
-  const expanded = live ? unfurled : (persistedOpen ?? false)
+  const expanded = rowOpen || count < 2 || (!live && (persistedOpen ?? false))
+  const representedByApproval = !!approval && currentTurn && approvalActivity
+
+  // The persistent approval activity row owns these status updates. Keep the
+  // original tool runtimes available for explicit disclosure, not a second line.
+  if (representedByApproval && !rowOpen) {
+    return null
+  }
 
   return (
     <div
@@ -950,15 +948,17 @@ const ToolRun: FC<PropsWithChildren<{ endIndex: number; startIndex: number }>> =
       data-tool-group=""
       ref={enterRef}
     >
-      <ToolRunHeader
-        completedAt={completedAt}
-        live={live}
-        onToggle={live ? undefined : () => setToolDisclosureOpen(disclosureId, !expanded)}
-        open={expanded}
-        startedAt={startedAt}
-        summary={summary}
-      />
-      {live && !unfurled && <ToolRunTicker>{children}</ToolRunTicker>}
+      {count > 1 && !representedByApproval && (
+        <ToolRunHeader
+          completedAt={completedAt}
+          live={live}
+          onToggle={live ? undefined : () => setToolDisclosureOpen(disclosureId, !expanded)}
+          open={expanded}
+          startedAt={startedAt}
+          summary={summary}
+        />
+      )}
+      {count > 1 && live && !unfurled && <ToolRunTicker>{children}</ToolRunTicker>}
       {expanded && <div className="grid min-w-0 max-w-full gap-(--tool-row-gap)">{children}</div>}
     </div>
   )

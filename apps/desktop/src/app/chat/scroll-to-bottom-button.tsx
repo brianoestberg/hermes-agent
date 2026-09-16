@@ -19,7 +19,8 @@ import { $threadJumpButtonVisible, $threadMessagesBelow, requestScrollToBottom }
  * away from the bottom, with an animated count of messages below the viewport.
  * Clicking re-arms sticky-bottom and pins the viewport.
  *
- * Approvals occupy this same area, so this control yields while one is pending.
+ * While approvals are pending, relabel this control to lead back to the
+ * transcript-owned stack using the existing scroll path.
  *
  * Enter/exit motion lives in styles.css under `.thread-jump-button` — a
  * directional scale (contract in from 1.1, contract out to 0.9) keyed off
@@ -32,6 +33,7 @@ export function ScrollToBottomButton({ sessionId }: { sessionId: string | null }
   const count = useStore($threadMessagesBelow)
   const reducedMotion = useReducedMotion()
   const request = useStore(useMemo(() => sessionApprovalRequest(sessionId), [sessionId]))
+  const approval = visible && Boolean(request)
   const hasShownRef = useRef(false)
 
   if (visible) {
@@ -42,12 +44,7 @@ export function ScrollToBottomButton({ sessionId }: { sessionId: string | null }
   const countLabel = t.sidebar.messageCount(count)
   const [beforeCount, afterCount] = countLabel.split(String(count))
 
-  const label = `${t.assistant.thread.scrollToBottom} · ${countLabel}`
-
-  // The approval stack already occupies the floating action area.
-  if (request) {
-    return null
-  }
+  const label = approval ? t.assistant.approval.jumpToApproval : `${t.assistant.thread.scrollToBottom} · ${countLabel}`
 
   return (
     <button
@@ -55,7 +52,9 @@ export function ScrollToBottomButton({ sessionId }: { sessionId: string | null }
       aria-label={label}
       className={cn(
         'thread-jump-button absolute left-1/2 z-20 flex h-8 items-center gap-1.5 rounded-full border bg-(--composer-fill) px-3 text-xs font-medium backdrop-blur-[0.75rem] [-webkit-backdrop-filter:blur(0.75rem)]',
-        'border-border/65 text-muted-foreground hover:text-foreground',
+        approval
+          ? 'border-primary/40 text-primary hover:bg-primary/10'
+          : 'border-border/65 text-muted-foreground hover:text-foreground',
         !visible && 'pointer-events-none'
       )}
       data-state={state}
@@ -70,11 +69,15 @@ export function ScrollToBottomButton({ sessionId }: { sessionId: string | null }
       type="button"
     >
       <Codicon name="arrow-down" size="0.875rem" />
-      <span aria-hidden className="whitespace-nowrap tabular-nums">
-        {beforeCount}
-        {!visible || reducedMotion ? count : <AnimatedInt key={sessionId} value={count} />}
-        {afterCount}
-      </span>
+      {approval ? (
+        <span>{label}</span>
+      ) : (
+        <span aria-hidden className="whitespace-nowrap tabular-nums">
+          {beforeCount}
+          {!visible || reducedMotion ? count : <AnimatedInt key={sessionId} value={count} />}
+          {afterCount}
+        </span>
+      )}
     </button>
   )
 }
